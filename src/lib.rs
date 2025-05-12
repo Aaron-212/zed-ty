@@ -44,7 +44,7 @@ impl TyExtension {
         }
 
         Err("No binary found.
-            Ty in Zed currently relys on external binary.
+            Ty for Zed currently relies on external binary.
             Install one with `uv tool install ty`."
             .into())
     }
@@ -66,6 +66,30 @@ impl zed::Extension for TyExtension {
             args: ty_binary.args.unwrap_or_else(|| vec!["server".into()]),
             env: ty_binary.environment.unwrap_or_default(),
         })
+    }
+
+    fn language_server_initialization_options(
+        &mut self,
+        server_id: &LanguageServerId,
+        worktree: &zed_extension_api::Worktree,
+    ) -> Result<Option<zed_extension_api::serde_json::Value>> {
+        let settings = LspSettings::for_worktree(server_id.as_ref(), worktree)
+            .ok()
+            .and_then(|lsp_settings| lsp_settings.initialization_options.clone())
+            .unwrap_or_default();
+        Ok(Some(settings))
+    }
+
+    fn language_server_workspace_configuration(
+        &mut self,
+        server_id: &LanguageServerId,
+        worktree: &zed_extension_api::Worktree,
+    ) -> Result<Option<zed_extension_api::serde_json::Value>> {
+        let settings = LspSettings::for_worktree(server_id.as_ref(), worktree)
+            .ok()
+            .and_then(|lsp_settings| lsp_settings.settings.clone())
+            .unwrap_or_default();
+        Ok(Some(settings))
     }
 }
 
