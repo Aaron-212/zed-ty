@@ -1,3 +1,4 @@
+use std::fs;
 use zed::LanguageServerId;
 use zed_extension_api::{self as zed, Result, settings::LspSettings};
 
@@ -7,12 +8,14 @@ struct TyBinary {
     environment: Option<Vec<(String, String)>>,
 }
 
-struct TyExtension {}
+struct TyExtension {
+    cached_binary_path: Option<String>,
+}
 
 impl TyExtension {
     fn language_server_binary(
         &mut self,
-        _: &LanguageServerId,
+        language_server_id: &LanguageServerId,
         worktree: &zed::Worktree,
     ) -> Result<TyBinary> {
         let binary_settings = LspSettings::for_worktree("ty", worktree)
@@ -22,11 +25,7 @@ impl TyExtension {
             .as_ref()
             .and_then(|binary_settings| binary_settings.arguments.clone());
 
-        let (platform, _) = zed::current_platform();
-        let environment = match platform {
-            zed::Os::Mac | zed::Os::Linux => Some(worktree.shell_env()),
-            zed::Os::Windows => None,
-        };
+        let environment = Some(worktree.shell_env());
 
         if let Some(path) = binary_settings.and_then(|binary_settings| binary_settings.path) {
             return Ok(TyBinary {
@@ -42,17 +41,99 @@ impl TyExtension {
                 environment,
             });
         }
+        if let Some(path) = &self.cached_binary_path {
+            if fs::metadata(path).map_or(false, |stat| stat.is_file()) {
+                return Ok(TyBinary {
+                    path: path.clone(),
+                    args: binary_args,
+                    environment,
+                });
+            }
+        }
 
-        Err("No binary found.
-            Ty for Zed currently relies on an external binary of Ty.
-            Install one with `uv tool install ty@latest`."
-            .into())
+        zed::set_language_server_installation_status(
+            language_server_id,
+            &zed::LanguageServerInstallationStatus::CheckingForUpdate,
+        );
+        let release = zed::latest_github_release(
+            "astral-sh/ty",
+            zed::GithubReleaseOptions {
+                require_assets: true,
+                pre_release: true,
+            },
+        )?;
+
+        let (platform, arch) = zed::current_platform();
+
+        let asset_stem = format!(
+            "ty-{arch}-{os}",
+            arch = match arch {
+                zed::Architecture::Aarch64 => "aarch64",
+                zed::Architecture::X86 => "i686",
+                zed::Architecture::X8664 => "x86_64",
+            },
+            os = match platform {
+                zed::Os::Mac => "apple-darwin",
+                zed::Os::Linux => "unknown-linux-gnu",
+                zed::Os::Windows => "pc-windows-msvc",
+            }
+        );
+        let asset_name = format!(
+            "{asset_stem}.{suffix}",
+            suffix = match platform {
+                zed::Os::Windows => "zip",
+                _ => "tar.gz",
+            }
+        );
+
+        let asset = release
+            .assets
+            .iter()
+            .find(|asset| asset.name == asset_name)
+            .ok_or_else(|| format!("no asset found matching {:?}", asset_name))?;
+
+        let version_dir = format!("ty-{}", release.version);
+        let binary_path = match platform {
+            zed::Os::Windows => format!("{version_dir}/ty.exe"),
+            _ => format!("{version_dir}/{asset_stem}/ty"),
+        };
+
+        if !fs::metadata(&binary_path).map_or(false, |stat| stat.is_file()) {
+            zed::set_language_server_installation_status(
+                language_server_id,
+                &zed::LanguageServerInstallationStatus::Downloading,
+            );
+            let file_kind = match platform {
+                zed::Os::Windows => zed::DownloadedFileType::Zip,
+                _ => zed::DownloadedFileType::GzipTar,
+            };
+            zed::download_file(&asset.download_url, &version_dir, file_kind)
+                .map_err(|e| format!("failed to download file: {e}"))?;
+
+            let entries =
+                fs::read_dir(".").map_err(|e| format!("failed to list working directory {e}"))?;
+            for entry in entries {
+                let entry = entry.map_err(|e| format!("failed to load directory entry {e}"))?;
+                if entry.file_name().to_str() != Some(&version_dir) {
+                    fs::remove_dir_all(entry.path()).ok();
+                }
+            }
+        }
+
+        self.cached_binary_path = Some(binary_path.clone());
+        Ok(TyBinary {
+            path: binary_path,
+            args: binary_args,
+            environment,
+        })
     }
 }
 
 impl zed::Extension for TyExtension {
     fn new() -> Self {
-        Self {}
+        Self {
+            cached_binary_path: None,
+        }
     }
 
     fn language_server_command(
