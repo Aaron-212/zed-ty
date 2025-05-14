@@ -44,8 +44,8 @@ impl TyExtension {
         }
 
         Err("No binary found.
-            Ty for Zed currently relies on external binary.
-            Install one with `uv tool install ty`."
+            Ty for Zed currently relies on an external binary of Ty.
+            Install one with `uv tool install ty@latest`."
             .into())
     }
 }

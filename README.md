@@ -1,6 +1,6 @@
 # Ty for Zed
 
-> [!INFO]
+> [!NOTE]
 > Ty is still in development and is not ready for production use. Please do not use it in production environments.
 
 > [!WARNING]
